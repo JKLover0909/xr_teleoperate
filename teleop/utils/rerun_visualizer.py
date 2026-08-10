@@ -107,29 +107,23 @@ class RerunLogger:
             )
             views.append(view)
 
-        # image_plot_paths = [
-        #                     f"{self.prefix}colors/color_0",
-        #                     f"{self.prefix}colors/color_1",
-        #                     f"{self.prefix}colors/color_2",
-        #                     f"{self.prefix}colors/color_3"
-        # ]
-        # for plot_path in image_plot_paths:
-        #     view = rrb.Spatial2DView(
-        #         origin = plot_path,
-        #         time_ranges=[
-        #             rrb.VisibleTimeRange(
-        #                 "idx",
-        #                 start = rrb.TimeRangeBoundary.cursor_relative(seq = -self.IdxRangeBoundary),
-        #                 end = rrb.TimeRangeBoundary.cursor_relative(),
-        #             )
-        #         ],
-        #     )
-        #     views.append(view)
+        image_plot_paths = [
+                            f"{self.prefix}colors/color_0",
+                            f"{self.prefix}colors/color_1",
+                            f"{self.prefix}colors/color_2",
+                            f"{self.prefix}colors/color_3"
+        ]
+        for plot_path in image_plot_paths:
+            view = rrb.Spatial2DView(
+                origin = plot_path,
+            )
+            views.append(view)
 
+        # 4 qpos plots + 4 camera views = 8 panels, laid out 4 columns x 2 rows.
         grid = rrb.Grid(contents = views,
-                        grid_columns=2,               
-                        column_shares=[1, 1],
-                        row_shares=[1, 1], 
+                        grid_columns=4,
+                        column_shares=[1, 1, 1, 1],
+                        row_shares=[1, 1],
         )
         views.append(rr.blueprint.SelectionPanel(state=rrb.PanelState.Collapsed))
         views.append(rr.blueprint.TimePanel(state=rrb.PanelState.Collapsed))
@@ -155,11 +149,17 @@ class RerunLogger:
                 for idx, val in enumerate(values):
                     rr.log(f"{self.prefix}{part}/actions/qpos/{idx}", rr.Scalar(val))
 
-        # # Log colors (images)
-        # colors = item_data.get('colors', {}) or {}
-        # for color_key, color_val in colors.items():
-        #     if color_val is not None:
-        #         rr.log(f"{self.prefix}colors/{color_key}", rr.Image(color_val))
+        # Log colors (images). Expects BGR numpy arrays -- callers must log
+        # this BEFORE colors get replaced with file-path strings for the
+        # JSON record (see EpisodeWriter._process_item_data).
+        colors = item_data.get('colors', {}) or {}
+        for color_key, color_val in colors.items():
+            if color_val is not None:
+                # Hand the BGR buffer over as-is. Flipping to RGB in Python
+                # (color_val[:, :, ::-1]) produced a non-contiguous view that
+                # Rerun had to repack, costing 25.5 ms per item and letting the
+                # writer queue grow without bound; this path costs 2.7 ms.
+                rr.log(f"{self.prefix}colors/{color_key}", rr.Image(color_val, color_model="BGR"))
 
         # # Log depths (images)
         # depths = item_data.get('depths', {}) or {}

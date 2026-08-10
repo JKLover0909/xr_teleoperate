@@ -33,6 +33,7 @@ class EpisodeWriter():
         self.image_size = image_size
 
         self.rerun_log = rerun_log
+        self.rerun_logger = None
         if self.rerun_log:
             logger_mp.info("==> RerunLogger initializing...\n")
             self.rerun_logger = RerunLogger(prefix="online/", IdxRangeBoundary = 60, memory_limit = "300MB")
@@ -120,7 +121,9 @@ class EpisodeWriter():
         self.first_item = True   # Flag to handle commas in JSON array
 
         if self.rerun_log:
-            self.online_logger = RerunLogger(prefix="online/", IdxRangeBoundary = 60, memory_limit="300MB")
+            # Reset the existing Rerun session for the new episode instead of
+            # spawning a fresh viewer (which leaked one process per episode).
+            pass
 
         self.is_available = False  # After the episode is created, the class is marked as unavailable until the episode is successfully saved
         logger_mp.info(f"==> New episode created: {self.episode_dir}")
@@ -147,7 +150,7 @@ class EpisodeWriter():
         while not self.stop_worker or not self.item_data_queue.empty():
             # Process items in the queue
             try:
-                item_data = self.item_data_queue.get(timeout=1)
+                item_data = self.item_data_queue.get(timeout=0.1)
                 try:
                     self._process_item_data(item_data)
                 except Exception as e:
@@ -155,7 +158,7 @@ class EpisodeWriter():
                 self.item_data_queue.task_done()
             except Empty:
                 pass
-        
+
             # Check if save_episode was triggered
             if self.need_save and self.item_data_queue.empty():
                 self._save_episode()
@@ -166,9 +169,19 @@ class EpisodeWriter():
         depths = item_data.get('depths', {})
         audios = item_data.get('audios', {})
 
-        # Save images
+        # Log to Rerun BEFORE mutating image arrays to file-path strings.
+        if self.rerun_log and self.rerun_logger is not None:
+            curent_record_time = time.time()
+            logger_mp.info(f"==> episode_id:{self.episode_id}  item_id:{idx}  current_time:{curent_record_time}")
+            self.rerun_logger.log_item_data(item_data)
+
+        # Save images (mutates item_data['colors'] to path strings)
         if colors:
             for idx_color, (color_key, color) in enumerate(colors.items()):
+                if color is None:
+                    logger_mp.warning(f"Skipping color image {color_key} at idx {idx}: frame is None.")
+                    item_data['colors'][color_key] = None
+                    continue
                 color_name = f'{str(idx).zfill(6)}_{color_key}.jpg'
                 if not cv2.imwrite(os.path.join(self.color_dir, color_name), color):
                     logger_mp.info(f"Failed to save color image.")
@@ -177,6 +190,9 @@ class EpisodeWriter():
         # Save depths
         if depths:
             for idx_depth, (depth_key, depth) in enumerate(depths.items()):
+                if depth is None:
+                    item_data['depths'][depth_key] = None
+                    continue
                 depth_name = f'{str(idx).zfill(6)}_{depth_key}.jpg'
                 if not cv2.imwrite(os.path.join(self.depth_dir, depth_name), depth):
                     logger_mp.info(f"Failed to save depth image.")
@@ -196,12 +212,6 @@ class EpisodeWriter():
             f.write(json.dumps(item_data, ensure_ascii=False, indent=4))
             self.first_item = False
 
-        # Log data if necessary
-        if self.rerun_log:
-            curent_record_time = time.time()
-            logger_mp.info(f"==> episode_id:{self.episode_id}  item_id:{idx}  current_time:{curent_record_time}")
-            self.rerun_logger.log_item_data(item_data)
-
     def save_episode(self):
         """
         Trigger the save operation. This sets the save flag, and the process_queue thread will handle it.
@@ -220,14 +230,28 @@ class EpisodeWriter():
         self.is_available = True   # Mark the class as available after saving
         logger_mp.info(f"==> Episode saved successfully to {self.json_path}.")
 
-    def close(self):
+    def close(self, timeout=10.0):
         """
         Stop the worker thread and ensure all tasks are completed.
+        Waits at most *timeout* seconds for the queue to drain and the
+        in-progress save to finish before forcing shutdown.
         """
-        self.item_data_queue.join()
-        if not self.is_available:  # If self.is_available is False, it means there is still data not saved.
+        deadline = time.time() + timeout
+
+        # Drain the queue (best-effort within timeout).
+        while not self.item_data_queue.empty() and time.time() < deadline:
+            time.sleep(0.05)
+
+        if not self.is_available:
             self.save_episode()
-        while not self.is_available:
-            time.sleep(0.01)
+
+        while not self.is_available and time.time() < deadline:
+            time.sleep(0.05)
+
+        if not self.is_available:
+            logger_mp.warning("EpisodeWriter.close(): timed out waiting for save to finish; data may be incomplete.")
+
         self.stop_worker = True
-        self.worker_thread.join()
+        self.worker_thread.join(timeout=max(1.0, deadline - time.time()))
+        if self.worker_thread.is_alive():
+            logger_mp.warning("EpisodeWriter.close(): worker thread did not exit in time.")

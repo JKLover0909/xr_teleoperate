@@ -74,6 +74,19 @@ class RerunLogger:
     def __init__(self, prefix = "", IdxRangeBoundary = 30, memory_limit = None):
         self.prefix = prefix
         self.IdxRangeBoundary = IdxRangeBoundary
+
+        # Monotonic sequence for the viewer timeline.
+        #
+        # Do NOT use the caller's item index here.  EpisodeWriter.create_episode()
+        # resets item_id to -1, so every episode's indices restart at 0.  Feeding
+        # those back into rr.set_time_sequence() sent the timeline *backwards*:
+        # the viewer's cursor stays at the highest sequence value it has seen, so
+        # a new (shorter) episode logged entirely below that value never became
+        # visible.  The window froze on the previous episode's last frame while
+        # recording carried on normally -- and where the index ranges overlapped,
+        # each point carried two values and the plots turned into sawtooth noise.
+        self._seq = -1
+
         rr.init(datetime.now().strftime("Runtime_%Y%m%d_%H%M%S"))
         if memory_limit:
             rr.spawn(memory_limit = memory_limit, hide_welcome_screen = True)
@@ -131,15 +144,21 @@ class RerunLogger:
 
 
     def log_item_data(self, item_data: dict):
-        rr.set_time_sequence("idx", item_data.get('idx', 0))
+        # Advance our own timeline; see self._seq in __init__ for why the
+        # caller's 'idx' must not be used as the sequence value.
+        self._seq += 1
+        rr.set_time_sequence("idx", self._seq)
 
+        # rr.Scalar was renamed to rr.Scalars in rerun 0.24 (we're on 0.26,
+        # pulled in as a hard dependency of lerobot sharing this env). A bare
+        # float still works -- Scalars wraps it as a single-element array.
         # Log states
         states = item_data.get('states', {}) or {}
         for part, state_info in states.items():
             if part != "body" and state_info:
                 values = state_info.get('qpos', [])
                 for idx, val in enumerate(values):
-                    rr.log(f"{self.prefix}{part}/states/qpos/{idx}", rr.Scalar(val))
+                    rr.log(f"{self.prefix}{part}/states/qpos/{idx}", rr.Scalars(val))
 
         # Log actions
         actions = item_data.get('actions', {}) or {}
@@ -147,7 +166,7 @@ class RerunLogger:
             if part != "body" and action_info:
                 values = action_info.get('qpos', [])
                 for idx, val in enumerate(values):
-                    rr.log(f"{self.prefix}{part}/actions/qpos/{idx}", rr.Scalar(val))
+                    rr.log(f"{self.prefix}{part}/actions/qpos/{idx}", rr.Scalars(val))
 
         # Log colors (images). Expects BGR numpy arrays -- callers must log
         # this BEFORE colors get replaced with file-path strings for the

@@ -1,12 +1,23 @@
 # Hướng dẫn chạy Teleoperation G1 (Inspire FTP)
 
-Nhánh code đang dùng: `main-inspire-deps`.
+Nhánh code đang dùng: `main-inspire-deps` (đang checkout đúng nhánh này).
+
+Máy Host hiện tại:
+
+| Mục | Giá trị |
+|---|---|
+| Repo | `/home/jkl/Projects/Humanoid/xr_teleoperate` |
+| Conda | `/home/jkl/miniconda3`, env `tv` (Python 3.10) |
+| Card mạng robot | `eno1` (**hiện đang DOWN**, chưa cắm dây) |
+| Card wifi | `wlp0s20f3` — `192.168.0.113` |
+| Cert TLS | `~/.config/xr_teleoperate/{cert.pem,key.pem}` |
 
 Thiết bị:
 
 | Thiết bị | IP |
 |---|---|
-| Host | 192.168.0.160 |
+| Host (mạng robot, qua `eno1`) | 192.168.123.2 — chưa cấu hình, xem Bước 0 |
+| Host (wifi, để Quest vào Vuer) | 192.168.0.113 |
 | PC2 (camera server) | 192.168.123.164 |
 | Inspire hand phải | 192.168.123.211 |
 | Inspire hand trái | 192.168.123.210 |
@@ -18,6 +29,45 @@ An toàn bắt buộc trước khi chạy robot thật:
 - Sẵn sàng nút E-stop.
 - Không nhấn `r` cho tới khi Quest đã kết nối và tay bạn ở gần tư thế hiện tại của robot.
 - Dừng bằng `q`, không dùng `Ctrl+C` khi đang tracking.
+
+---
+
+## Bước 0 — Những thứ máy này còn thiếu
+
+Kiểm tra ngày 10/08/2026 trên máy `jkl`. Env `tv` đã cài đủ phần teleop lõi và **đã chạy thử với `PYTHONNOUSERSITE=1`**: import toàn bộ chuỗi module của `teleop_hand_and_arm.py`, `G1_29_ArmIK.solve_ik()` trả về vector 14 khớp, `HandRetargeting` nạp được cả `INSPIRE_HAND` (12 khớp) lẫn `UNITREE_DEX3` (7 khớp). Phiên bản: numpy 1.26.4, scipy 1.13.1, pinocchio 3.1.0, torch 2.3.0+cu121, matplotlib 3.7.5.
+
+Phần phần mềm đã xong hết. Chuỗi tay Inspire cũng đã thông: repo `unitree_lerobot` ở `/home/jkl/Projects/Humanoid/unitree_lerobot` (nhánh `son-makedata-headcam-fake-flat26`), `inspire_hand_ws` đã clone đúng commit `fc75490`, `inspire_sdkpy` cài editable, `pymodbus 3.6.9`. Đã chạy thử `load_dds()` của driver — trả về đủ 6 symbol DDS/IDL.
+
+Còn hai việc thuộc về phần cứng/hệ thống:
+
+**1. Mạng robot chưa nối.** `eno1` đang DOWN, máy chỉ có wifi `192.168.0.113`. Khi cắm dây vào robot:
+
+```bash
+sudo ip addr add 192.168.123.2/24 dev eno1
+sudo ip link set eno1 up
+ping -c3 192.168.123.164        # PC2 phải trả lời
+```
+
+Nếu bạn dùng IP khác `192.168.123.2` thì **phải sinh lại cert** (xem Bước 2), vì cert hiện tại chỉ ký cho các IP: `127.0.0.1`, `192.168.0.113`, `192.168.123.2`, `192.168.123.164`, và DNS `localhost`.
+
+**2. Mở firewall** (chưa làm, cần sudo):
+
+```bash
+sudo ufw allow 8012
+```
+
+### Kiểm tra nhanh link XR mà không cần robot
+
+Chạy được ngay bây giờ, không cần PC2/robot/camera — dựng televuer, phát ảnh gradient tổng hợp lên kính và in pose nhận về:
+
+```bash
+source /home/jkl/miniconda3/etc/profile.d/conda.sh
+conda activate tv
+export PYTHONNOUSERSITE=1
+python /home/jkl/Projects/Humanoid/xr_teleoperate/tools/test_xr_link.py --hand
+```
+
+Trên Quest mở `https://192.168.0.113:8012/?ws=wss://192.168.0.113:8012` → Advanced → Proceed → **Virtual Reality**. Nếu log in ra `head_pose` khác 0 là cert + websocket + hand tracking đều thông.
 
 ---
 
@@ -86,15 +136,60 @@ Chỉ headcam là đủ cho teleop không record. Khi wrist ổn định lại, 
 Mỗi terminal mới trên Host đều cần chạy khối này trước:
 
 ```bash
-source /home/jkl0909/.holosoma_deps/miniconda3/etc/profile.d/conda.sh
+source /home/jkl/miniconda3/etc/profile.d/conda.sh
 conda activate tv
 
 export PYTHONNOUSERSITE=1
 export PIP_USER=0
-
-export XR_TELEOP_CERT="$HOME/.config/xr_teleoperate/cert.pem"
-export XR_TELEOP_KEY="$HOME/.config/xr_teleoperate/key.pem"
 ```
+
+`PYTHONNOUSERSITE=1` **không phải tuỳ chọn** trên máy này: `~/.local/lib/python3.10/site-packages` có sẵn `aiohttp`, `aioice`, `absl`… và sẽ đè lên bản trong env `tv` nếu không tắt.
+
+Env `tv` đã được vá để chạy đúng khi bật cờ này. Trước đó nó **âm thầm mượn** `multidict`, `websockets`, `msgpack`, `pyzmq`, `matplotlib`, `meshcat`, `tqdm` từ `~/.local` — chạy được nhưng chỉ vì user site che lấp chỗ thiếu. Nếu sau này thấy `ModuleNotFoundError` cho một gói mà `pip list` vẫn báo có, gần như chắc chắn là bệnh này: kiểm tra bằng
+
+```bash
+PYTHONNOUSERSITE=1 python -c "import <tên_gói>"
+```
+
+Không cần `XR_TELEOP_CERT`/`XR_TELEOP_KEY`: televuer tự tìm `~/.config/xr_teleoperate/cert.pem` và `key.pem` ([televuer.py:77-83](teleop/televuer/src/televuer/televuer.py#L77-L83)), và hai file đó đã có sẵn.
+
+### Sinh lại cert khi đổi IP
+
+Cert hiện tại ký cho `localhost, 127.0.0.1, 192.168.0.113, 192.168.123.2, 192.168.123.164`. Nếu IP Host đổi:
+
+```bash
+cd /home/jkl/Projects/Humanoid/xr_teleoperate/teleop/televuer
+# sửa IP trong server_ext.cnf trước, rồi:
+openssl x509 -req -in server.csr -CA rootCA.pem -CAkey rootCA.key -CAcreateserial \
+  -out cert.pem -days 3650 -sha256 -extfile server_ext.cnf
+cp cert.pem key.pem ~/.config/xr_teleoperate/
+```
+
+Quest chỉ cần bấm Advanced → Proceed nên không phải cài `rootCA.pem`; chỉ Apple Vision Pro mới cần AirDrop file đó sang và cài.
+
+### Nếu phải dựng lại env `tv` từ đầu
+
+Hai chỗ bắt buộc lệch khỏi README gốc, nếu làm đúng theo README sẽ hỏng:
+
+```bash
+# 1. dex-retargeting: KHÔNG để pip kéo gói "pin" về, nó đè lên pinocchio 3.1.0 của conda
+cd /home/jkl/Projects/Humanoid/xr_teleoperate/teleop/robot_control/dex-retargeting
+pip install -e . --no-deps
+pip install "torch==2.3.0" "pytransform3d>=3.5.0" "nlopt>=2.6.1,<2.8.0" \
+            "trimesh>=4.4.0" "anytree>=2.12.0" "lxml>=5.2.2"
+
+# 2. vuer 0.0.60 khai "params-proto>=2.13.0" nhưng bản 3.x đã bỏ export Flag/PrefixProto/Proto
+pip install "params-proto==2.13.2"
+
+# 3. scipy phải là bản còn hỗ trợ numpy 1.x
+pip install "scipy==1.13.1"
+```
+
+Triệu chứng nếu quên bước 2: `from vuer import Vuer` báo `cannot import name 'Vuer'` kèm gợi ý lạc hướng "install vuer[all]" — nguyên nhân thật là `ImportError: cannot import name 'Flag' from 'params_proto'`.
+
+Triệu chứng nếu quên bước 3: `scipy.special` chết với `ValueError: All ufuncs must have type numpy.ufunc` — scipy 1.15 build cho numpy 2.x, không chạy với numpy 1.26.4.
+
+> ⚠️ **Không dùng `pip install --ignore-installed`.** Cờ này cài đè mà không gỡ bản cũ, để lại file lẫn lộn giữa hai version. Đã dính đúng lỗi này với `params_proto` (thư mục `hyper/` của 3.3.0 còn lại, che mất `hyper.py` của 2.13.2 → `ImportError: cannot import name 'ProtoWrapper'`), `numpy` và `scipy` (dist-info của cả hai version cùng tồn tại). Dùng `--force-reinstall`, hoặc gỡ sạch thư mục gói trong `site-packages` trước khi cài lại.
 
 ---
 
@@ -114,20 +209,22 @@ Cửa sổ OpenCV hiện ảnh camera realtime từ PC2. Nhấn `q` tại cửa 
 
 Driver chỉ hỗ trợ 1 tay mỗi lần chạy. Cần mở **2 terminal**.
 
+Repo: `/home/jkl/Projects/Humanoid/unitree_lerobot`, nhánh `son-makedata-headcam-fake-flat26`.
+
+**Không cần `export PYTHONPATH`.** Driver tự thêm đường dẫn IDL: [`add_inspire_idl_path()`](../unitree_lerobot/unitree_lerobot/eval_robot/inspire_hand_ftp_driver.py) tính `repo_root/inspire_hand_ws/inspire_hand_sdk/inspire_sdkpy` từ vị trí file rồi `sys.path.insert(0, ...)`. Đặt `PYTHONPATH` thêm là thừa, và nếu đặt sai còn dễ gây nhầm.
+
 ### Terminal 1a — tay PHẢI
 
 ```bash
-source /home/jkl0909/.holosoma_deps/miniconda3/etc/profile.d/conda.sh
+source /home/jkl/miniconda3/etc/profile.d/conda.sh
 conda activate tv
 export PYTHONNOUSERSITE=1
 export PIP_USER=0
 
-export PYTHONPATH="/home/jkl0909/code/Son/unitree_lerobot/inspire_hand_ws/inspire_hand_sdk/inspire_sdkpy"
-
-cd /home/jkl0909/code/Son/unitree_lerobot
+cd /home/jkl/Projects/Humanoid/unitree_lerobot
 
 python -u unitree_lerobot/eval_robot/inspire_hand_ftp_driver.py \
-  --network-interface=enp1s0 \
+  --network-interface=eno1 \
   --hand=right \
   --ip=192.168.123.211 \
   --no-touch
@@ -136,21 +233,84 @@ python -u unitree_lerobot/eval_robot/inspire_hand_ftp_driver.py \
 ### Terminal 1b — tay TRÁI
 
 ```bash
-source /home/jkl0909/.holosoma_deps/miniconda3/etc/profile.d/conda.sh
+source /home/jkl/miniconda3/etc/profile.d/conda.sh
 conda activate tv
 export PYTHONNOUSERSITE=1
 export PIP_USER=0
 
-export PYTHONPATH="/home/jkl0909/code/Son/unitree_lerobot/inspire_hand_ws/inspire_hand_sdk/inspire_sdkpy"
-
-cd /home/jkl0909/code/Son/unitree_lerobot
+cd /home/jkl/Projects/Humanoid/unitree_lerobot
 
 python -u unitree_lerobot/eval_robot/inspire_hand_ftp_driver.py \
-  --network-interface=enp1s0 \
+  --network-interface=eno1 \
   --hand=left \
   --ip=192.168.123.210 \
   --no-touch
 ```
+
+Tham số khác của driver (mặc định thường không cần đổi): `--port` (6000), `--device-id` (1), `--frequency` (20.0).
+
+### `inspire_hand_ws` — nguồn gốc và cách cài lại
+
+Thư mục này nằm trong repo dưới dạng **gitlink mồ côi**: có entry trong cây git nhưng `.gitmodules` chỉ khai báo mỗi `unitree_lerobot/lerobot`, không có dòng nào cho nó. Nên `git submodule update --init` không kéo được — git không biết URL.
+
+```bash
+$ git ls-tree HEAD inspire_hand_ws
+160000 commit fc754900caaaa82c9b59fb12c1b79ebfd1c1a0e7    inspire_hand_ws
+```
+
+Upstream đã truy ra được: **[NaCl-1374/inspire_hand_ws](https://github.com/NaCl-1374/inspire_hand_ws)** — commit `fc75490` tồn tại đúng trong repo đó (đã xác minh bằng `git cat-file -e` trên bare clone).
+
+Nếu phải cài lại từ đầu:
+
+```bash
+cd /home/jkl/Projects/Humanoid/unitree_lerobot
+git clone https://github.com/NaCl-1374/inspire_hand_ws.git inspire_hand_ws
+cd inspire_hand_ws && git checkout fc754900caaaa82c9b59fb12c1b79ebfd1c1a0e7
+
+# cài SDK dạng editable -> inspire_sdkpy dùng được ở mọi nơi, KHÔNG cần PYTHONPATH
+conda activate tv && export PYTHONNOUSERSITE=1
+pip install -e /home/jkl/Projects/Humanoid/unitree_lerobot/inspire_hand_ws/inspire_hand_sdk
+```
+
+Kéo theo: PyQt5, pyqtgraph, colorcet, pyserial, và **hạ `pymodbus` xuống 3.6.9** (pin của SDK).
+
+Muốn khỏi lặp lại chuyện này thì đăng ký submodule cho tử tế rồi commit:
+
+```bash
+git config -f .gitmodules submodule.inspire_hand_ws.path inspire_hand_ws
+git config -f .gitmodules submodule.inspire_hand_ws.url https://github.com/NaCl-1374/inspire_hand_ws.git
+git submodule sync
+```
+
+### `pymodbus` phải là bản < 3.8
+
+Hiện là **3.6.9** — đúng pin trong `inspire_hand_sdk/setup.py`. **Không nâng lên 3.8+**: driver gọi kiểu positional 3 tham số — `read_holding_registers(address, count, device_id)`, `write_register(1004, 1, device_id)`, `write_registers(addr, values, device_id)` — mà từ 3.8 các tham số sau `address` thành keyword-only, sẽ lỗi `TypeError` ngay lần đọc thanh ghi đầu tiên.
+
+Chữ ký đã kiểm chứng trên bản đang cài:
+
+```text
+read_holding_registers(self, address, count=1, slave=0, **kwargs)
+```
+
+tức tham số vị trí thứ 3 chính là `slave` — đúng ý nghĩa `--device-id`.
+
+### Kiểm tra nhanh trước khi chạy thật
+
+```bash
+conda activate tv && export PYTHONNOUSERSITE=1
+cd /home/jkl/Projects/Humanoid/unitree_lerobot
+
+# 1. IDL cho driver (driver tự thêm thư mục inspire_sdkpy vào sys.path)
+PYTHONPATH=inspire_hand_ws/inspire_hand_sdk/inspire_sdkpy \
+  python -c "from inspire_dds import inspire_hand_ctrl, inspire_hand_state, inspire_hand_touch; print('inspire_dds OK')"
+
+# 2. package cho xr_teleoperate (đã pip install -e nên không cần PYTHONPATH)
+python -c "from inspire_sdkpy import inspire_dds; import inspire_sdkpy.inspire_hand_defaut; print('inspire_sdkpy OK')"
+```
+
+⚠️ `inspire_sdkpy/__init__.py` kéo cả `qt_tabs` (pyqtgraph + PyQt5 + colorcet) chỉ để export mấy class GUI. Nên `from inspire_sdkpy import inspire_dds` **bắt buộc phải có sẵn Qt stack**, dù teleop không dùng GUI. Thiếu sẽ báo `ModuleNotFoundError: No module named 'pyqtgraph'` — nghe như lỗi vô can nhưng thực chất chặn luôn tay Inspire.
+
+Chạy `--help` được **không** có nghĩa là đã sẵn sàng: `--help` không gọi `load_dds()`. Dùng hai lệnh trên để kiểm tra thật.
 
 Cả hai chờ log báo tần số ổn định (khoảng `~20 Hz`). Giữ cả hai terminal chạy xuyên suốt.
 
@@ -159,17 +319,14 @@ Cả hai chờ log báo tần số ổn định (khoảng `~20 Hz`). Giữ cả 
 ## Bước 5 — Host Terminal 2: chương trình teleop chính
 
 ```bash
-source /home/jkl0909/.holosoma_deps/miniconda3/etc/profile.d/conda.sh
+source /home/jkl/miniconda3/etc/profile.d/conda.sh
 conda activate tv
 export PYTHONNOUSERSITE=1
 export PIP_USER=0
 
-export XR_TELEOP_CERT="$HOME/.config/xr_teleoperate/cert.pem"
-export XR_TELEOP_KEY="$HOME/.config/xr_teleoperate/key.pem"
+export PYTHONPATH="/home/jkl/Projects/Humanoid/xr_teleoperate"
 
-export PYTHONPATH="/home/jkl0909/code/Son/xr_teleoperate:/home/jkl0909/code/Son/unitree_lerobot/inspire_hand_ws/inspire_hand_sdk/inspire_sdkpy"
-
-cd /home/jkl0909/code/Son/xr_teleoperate/teleop
+cd /home/jkl/Projects/Humanoid/xr_teleoperate/teleop
 
 python teleop_hand_and_arm.py \
   --arm=G1_29 \
@@ -178,7 +335,7 @@ python teleop_hand_and_arm.py \
   --display-mode=immersive \
   --motion \
   --img-server-ip=192.168.123.164 \
-  --network-interface=enp1s0 \
+  --network-interface=eno1 \
   --record \
   --task-dir=./utils/data/ \
   --task-name="pick_bottle" \
@@ -186,6 +343,10 @@ python teleop_hand_and_arm.py \
   --task-desc="bimanual manipulation" \
   --task-steps="step1: reach; step2: grasp; step3: place"
 ```
+
+Chỉ teleop, không ghi dataset — bỏ `--record` và toàn bộ `--task-*`:
+
+```bash
 python teleop_hand_and_arm.py \
   --arm=G1_29 \
   --ee=inspire_ftp \
@@ -193,11 +354,14 @@ python teleop_hand_and_arm.py \
   --display-mode=immersive \
   --motion \
   --img-server-ip=192.168.123.164 \
-  --network-interface=enp1s0
+  --network-interface=eno1
+```
+
+`PYTHONPATH` **không còn cần trỏ tới inspire SDK**: `inspire_sdkpy` đã được `pip install -e` vào env `tv` (xem Bước 4), nên [robot_hand_inspire.py:170-171](teleop/robot_control/robot_hand_inspire.py#L170-L171) import thẳng được. Chỉ giữ lại đường dẫn repo `xr_teleoperate` cho `import teleop.*`.
 
 `--motion` bỏ qua tự chuyển robot vào development/debug mode. Robot phải đã ở Regular/Control mode (R1+X trên tay cầm Unitree) trước khi chạy.
 
-**Quan trọng — `--img-server-ip` phải là IP thật của PC2 (`192.168.123.164`, cổng ethernet), không phải IP của Host.** Nhầm sang IP Host (`192.168.0.161`) khiến `ImageClient` không request được config, tự fallback đọc cache `cam_config_client.yaml` cũ và không subscribe được ZMQ thật — hệ quả: Quest vẫn hiện video (do WebRTC dùng port cố định khác), nhưng khi `--record` thì mọi item ghi ra sẽ có `colors: {}` trống hoàn toàn, không có ảnh nào lưu được dù `states`/`actions` (khớp tay/cánh tay) vẫn ghi đúng.
+**Quan trọng — `--img-server-ip` phải là IP thật của PC2 (`192.168.123.164`, cổng ethernet), không phải IP của Host.** Nhầm sang IP Host (`192.168.0.113`) khiến `ImageClient` không request được config, tự fallback đọc cache `cam_config_client.yaml` cũ và không subscribe được ZMQ thật — hệ quả: Quest vẫn hiện video (do WebRTC dùng port cố định khác), nhưng khi `--record` thì mọi item ghi ra sẽ có `colors: {}` trống hoàn toàn, không có ảnh nào lưu được dù `states`/`actions` (khớp tay/cánh tay) vẫn ghi đúng.
 
 `--record` bật ghi dataset. Nhấn `s` để bắt đầu/lưu episode. Wrist camera cần `enable_zmq: true` trên PC2.
 
@@ -214,7 +378,7 @@ python teleop_hand_and_arm.py \
   --camera-layout=quad \
   --motion \
   --img-server-ip=192.168.123.164 \
-  --network-interface=enp1s0
+  --network-interface=eno1
 ```
 
 Bố cục hiển thị trên Quest:
@@ -228,8 +392,6 @@ Bố cục hiển thị trên Quest:
 ```
 
 Yêu cầu: cả 3 camera phải `enable_zmq: true` trên PC2, và `--display-mode` phải là `immersive` hoặc `ego`. Chế độ này ghép ảnh trên Host qua ZMQ thay vì dùng WebRTC head đơn.
-
-Nếu chỉ teleop không ghi dataset, bỏ các dòng `--record` và `--task-*`.
 
 Chờ dòng:
 
@@ -248,8 +410,10 @@ Ngay sau khi khởi tạo `Inspire_Controller_FTP`, log sẽ in liên tục `Pub
 Trên trình duyệt Quest, mở:
 
 ```text
-https://192.168.0.160:8012/?ws=wss://192.168.0.160:8012
+https://192.168.0.113:8012/?ws=wss://192.168.0.113:8012
 ```
+
+IP này là IP wifi của Host (`wlp0s20f3`), không phải IP mạng robot — Quest phải cùng mạng `192.168.0.x`. Kiểm tra lại bằng `ip -4 addr show wlp0s20f3` nếu DHCP cấp IP khác.
 
 1. Nếu có cảnh báo: **Advanced → Proceed**.
 2. Bấm **Virtual Reality**.
@@ -326,7 +490,7 @@ Không dùng `Ctrl+C` cho Terminal 2 trong lúc đang tracking, trừ trường 
 | `--arm` | `G1_29` / `G1_23` / `H1_2` / `H1` / `H2` | `G1_29` | Loại robot + DOF |
 | `--ee` | `dex1` / `dex3` / `inspire_ftp` / `inspire_dfx` / `brainco` | None | Bộ tay/gripper |
 | `--img-server-ip` | IP | `192.168.123.164` | IP PC2 image server (cổng ethernet, **không phải IP Host**) |
-| `--network-interface` | string | None | Interface DDS (ví dụ `enp1s0`) |
+| `--network-interface` | string | None | Interface DDS — trên máy này là `eno1` |
 | `--motion` | flag | tắt | Bỏ qua tự chuyển debug mode; arm qua `rt/arm_sdk` |
 | `--headless` | flag | tắt | Tắt rerun visualizer khi record |
 | `--sim` | flag | tắt | Isaac Sim (DDS domain 1) |
@@ -379,9 +543,11 @@ Phím tắt khi chạy: `r` = bắt đầu tracking, `s` = toggle ghi/lưu episo
 - **Sửa code trong `teleop/televuer/` mà không thấy tác dụng**: package `televuer` từng được cài dạng wheel copy, nên bản chạy thực tế nằm trong `site-packages`, không phải repo. Đã cài lại dạng editable:
 
   ```bash
-  /home/jkl0909/.holosoma_deps/miniconda3/envs/tv/bin/python -m pip install -e \
-    /home/jkl0909/code/Son/xr_teleoperate/teleop/televuer --no-deps
+  /home/jkl/miniconda3/envs/tv/bin/python -m pip install -e \
+    /home/jkl/Projects/Humanoid/xr_teleoperate/teleop/televuer --no-deps
   ```
+
+  Trên máy này đã cài đúng dạng editable rồi (`televuer 4.0.0`, `teleimager 1.5.0`, `dex_retargeting 0.4.7` đều trỏ vào repo).
 
   Kiểm tra:
 
@@ -429,5 +595,47 @@ Phím tắt khi chạy: `r` = bắt đầu tracking, `s` = toggle ghi/lưu episo
   | Phát hiện mất kết nối | không | **có** |
 
   Dấu vết của lỗi này còn trong 4 episode đã ghi (`consec_dup` 3.4–12.5%, có chuỗi trùng dài tới 3 frame). Dữ liệu cũ vẫn dùng được nhưng một số ảnh bị lặp không đúng với giá trị khớp đi kèm.
+
+---
+
+## Bước 8 — Replay dữ liệu đã ghi lên robot thật (repo `unitree_lerobot`)
+
+Sau khi đã convert dataset raw (`data.json`) sang `LeRobotDataset` (`unitree_lerobot/utils/convert_unitree_json_to_lerobot.py`, `robot_type=Unitree_G1_Inspire_3Cam`), replay cả cánh tay và bàn tay theo đúng một episode bằng script gộp — **một tiến trình, một vòng lặp**, nên tay và bàn tay luôn khớp đúng frame, không lệch pha như chạy hai script riêng:
+
+```bash
+source /home/jkl/miniconda3/etc/profile.d/conda.sh
+conda activate tv
+export PYTHONNOUSERSITE=1
+
+cd /home/jkl/Projects/Humanoid/unitree_lerobot
+python unitree_lerobot/eval_robot/replay_arm_and_hand_eno1.py \
+  --repo-id local/place_bottle_test1 \
+  --episode 10 \
+  --frequency 30
+```
+
+`--episode` là **index 0-based**, không phải số thứ tự thư mục `episode_XXXX` — ví dụ `episode_0011` (thư mục thứ 11, không có `episode_0000`) ứng với `--episode 10`. Kiểm tra lại bằng `dataset.meta.episodes` nếu đổi dataset khác.
+
+### Điều kiện trước khi chạy
+
+- **Terminal 1a/1b** (Bước 4, `inspire_hand_ftp_driver.py` cho cả hai tay) phải đang chạy — nếu không, lệnh gửi tới bàn tay vẫn "chạy được" mà tay không nhích, không báo lỗi gì.
+- Robot đứng vững, sẵn E-stop, ở Regular/Control mode (script tự gọi `ReleaseMode()` để nhả mode `ai`/Sport trước khi gửi lệnh khớp thô, trừ khi truyền `--motion`).
+
+### Phím điều khiển
+
+| Bước | Hành động |
+|---|---|
+| `Please enter the start signal... (s)` | Nhấn `s` — robot di chuyển tới tư thế đầu episode, có kiểm tra hội tụ (không phải `sleep` mù) |
+| `Enter 's' to start playback` | Nhấn `s` — bắt đầu phát quỹ đạo thật |
+| Trong lúc phát hoặc sau khi hết episode | Nhấn **`q`** hoặc **Ctrl+C** — dừng chương trình |
+
+Chạy hết episode tự nhiên: robot **giữ nguyên tư thế cuối**, chương trình **không tự thoát** — chỉ dừng thật khi bạn nhấn `q`/Ctrl+C. Dù dừng theo cách nào (hết tự nhiên, `q`, hay Ctrl+C), robot đều di chuyển có kiểm soát về đúng tư thế cuối episode trước khi tiến trình thoát — không đứng lại giữa đường.
+
+> ⚠️ Ngay khi tiến trình thoát, lực giữ chủ động mất hoàn toàn (mode `ai` chưa được khôi phục) — cánh tay có thể hơi giật/rơi nhẹ từ tư thế cuối episode. Đây là hạn chế đã biết, chưa có cách khắc phục triệt để (xem lịch sử trong session note).
+
+### Script khác (nếu chỉ cần riêng cánh tay hoặc riêng bàn tay)
+
+- `replay_robot_eno1.py --repo_id ... --episodes N --arm G1_29 --ee "" --frequency 30` — chỉ cánh tay (chú ý: dùng `_` không phải `-`, và `--episodes` không phải `--episode`, vì đây là wrapper quanh `replay_robot.py` gốc dùng `draccus`)
+- `replay_hand_only.py --repo-id ... --episode N --frequency 30` — chỉ bàn tay, cần chạy song song ở terminal riêng nếu muốn cả hai (không đồng bộ tuyệt đối, khác với script gộp ở trên)
 
 - **Những thứ đã loại trừ (đo thật, KHÔNG phải nguyên nhân)**: camera PC2 chạy đúng 30.1 Hz cả 3 luồng, 0 frame mất; IK `solve_ik` chỉ 4.5 ms (thừa sức 30 Hz); ghi 3 ảnh JPEG 5.6 ms; `json.dumps` 0.06 ms; gọi 3 getter camera 0.007 ms.

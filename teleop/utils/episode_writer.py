@@ -120,10 +120,9 @@ class EpisodeWriter():
             f.write('"data": [\n')
         self.first_item = True   # Flag to handle commas in JSON array
 
-        if self.rerun_log:
-            # Reset the existing Rerun session for the new episode instead of
-            # spawning a fresh viewer (which leaked one process per episode).
-            pass
+        # Nothing to do for Rerun here: the logger keeps its own monotonic
+        # timeline (RerunLogger._seq) precisely because item_id restarts at -1
+        # above, and it reuses the single spawned viewer for every episode.
 
         self.is_available = False  # After the episode is created, the class is marked as unavailable until the episode is successfully saved
         logger_mp.info(f"==> New episode created: {self.episode_dir}")

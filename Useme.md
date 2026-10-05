@@ -639,3 +639,4 @@ Chạy hết episode tự nhiên: robot **giữ nguyên tư thế cuối**, chư
 - `replay_hand_only.py --repo-id ... --episode N --frequency 30` — chỉ bàn tay, cần chạy song song ở terminal riêng nếu muốn cả hai (không đồng bộ tuyệt đối, khác với script gộp ở trên)
 
 - **Những thứ đã loại trừ (đo thật, KHÔNG phải nguyên nhân)**: camera PC2 chạy đúng 30.1 Hz cả 3 luồng, 0 frame mất; IK `solve_ik` chỉ 4.5 ms (thừa sức 30 Hz); ghi 3 ảnh JPEG 5.6 ms; `json.dumps` 0.06 ms; gọi 3 getter camera 0.007 ms.
+export PYTHONNOUSERSITE=1
